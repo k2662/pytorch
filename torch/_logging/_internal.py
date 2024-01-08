@@ -197,6 +197,7 @@ def set_logs(
     onnx_diagnostics: bool = False,
     fusion: bool = False,
     overlap: bool = False,
+    export: Optional[int] = None,
     modules: Optional[Dict[str, Union[int, bool]]] = None,
 ):
     """
@@ -341,6 +342,9 @@ def set_logs(
         overlap (:class:`bool`):
             Whether to emit detailed Inductor compute/comm overlap decisions. Default: ``False``
 
+        export (:class:`Optional[int]`):
+            The log level for export. Default: ``logging.WARN``
+
         modules (dict):
             This argument provides an alternate way to specify the above log
             component and artifact settings, in the format of a keyword args
@@ -439,6 +443,7 @@ def set_logs(
         onnx_diagnostics=onnx_diagnostics,
         fusion=fusion,
         overlap=overlap,
+        export=export,
     )
 
 

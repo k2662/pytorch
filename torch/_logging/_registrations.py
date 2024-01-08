@@ -21,6 +21,7 @@ register_log(
 register_log("dist_ddp", ["torch.nn.parallel.distributed"])
 register_log("dist_fsdp", ["torch.distributed.fsdp"])
 register_log("onnx", "torch.onnx")
+register_log("export", ["torch._dynamo", "torch.export", *DYNAMIC])
 
 register_artifact(
     "guards",
