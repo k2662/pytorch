@@ -37,6 +37,7 @@ from .graph_signature import (  # noqa: F401
     _sig_to_specs,
     ArgumentSpec,
     ConstantArgument,
+    CustomObjArgument,
     ExportGraphSignature,
     InputKind,
     InputSpec,
@@ -263,27 +264,22 @@ class ExportedProgram:
                     f"{received_spec}"
                 )
 
-        ordered_params = tuple(
-            self.state_dict[name] for name in self.graph_signature.parameters
-        )
-        ordered_buffers = tuple(
-            self.state_dict[name] for name in self.graph_signature.buffers
-        )
-        if hasattr(self.graph_signature, "lifted_tensor_constants"):
-            ordered_tensor_constants = tuple(
-                self.tensor_constants[name]
-                for name in self.graph_signature.lifted_tensor_constants
-            )
-        else:
-            ordered_tensor_constants = ()
+        additional_inputs = []
+        for input_ in self.graph_signature.inputs:
+            if input_.kind == InputKind.USER_INPUT:
+                continue
+            elif input_.kind in (InputKind.PARAMETER, InputKind.BUFFER):
+                additional_inputs.append(self.state_dict[input_.target])
+            elif input_.kind in (InputKind.CONSTANT_TENSOR, InputKind.CUSTOM_OBJ):
+                additional_inputs.append(self.tensor_constants[input_.target])
+        additional_inputs = tuple(additional_inputs)
+
         self._check_input_constraints(*args)
 
         # NOTE: calling convention is first params, then buffers, then args as user supplied them.
         # See: torch/_functorch/aot_autograd.py#L1034
         res = torch.fx.Interpreter(self.graph_module).run(
-            *ordered_params,
-            *ordered_buffers,
-            *ordered_tensor_constants,
+            *additional_inputs,
             *args,
             enable_io_processing=False,
         )

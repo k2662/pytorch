@@ -1,19 +1,29 @@
-from typing import Dict
+from typing import Dict, Union
 
 import torch
 from torch._guards import detect_fake_mode
-from torch.export.exported_program import InputKind, InputSpec, TensorArgument
+from torch.export.exported_program import (
+    CustomObjArgument,
+    InputKind,
+    InputSpec,
+    TensorArgument,
+)
 
 
-def lift_constant_tensor_pass(gm, graph_signature) -> Dict[str, torch.Tensor]:
+def lift_constant_tensor_pass(
+    gm, graph_signature
+) -> Dict[str, Union[torch.Tensor, torch.ScriptObject]]:
     """
     Takes an ExportedProgram and returns the ExportedProgram modified in-place,
-    with the constant tensors as buffers.
+    with the constant tensors and custom classes lifted as inputs.
     """
     if len([node for node in gm.graph.nodes if node.op == "placeholder"]) == 0:
         return {}
 
     inputs = graph_signature.input_specs
+    num_custom_obj = sum(
+        input_specs.kind == InputKind.CUSTOM_OBJ for input_specs in inputs
+    )
     num_tensor_constants = sum(
         input_specs.kind == InputKind.CONSTANT_TENSOR for input_specs in inputs
     )
@@ -30,40 +40,62 @@ def lift_constant_tensor_pass(gm, graph_signature) -> Dict[str, torch.Tensor]:
             break
         first_user_input_loc += 1
 
-    tensor_constants = {}
+    all_constants = {}
 
     for node in gm.graph.nodes:
         if node.op == "get_attr":
-            constant_tensor = getattr(gm, node.target)
-            if not isinstance(constant_tensor, torch.Tensor):
+            constant_val = getattr(gm, node.target)
+            if not isinstance(constant_val, (torch.ScriptObject, torch.Tensor)):
                 continue
 
-            constant_tensor_fqn = f"_lifted_tensor_constant{num_tensor_constants}"
-            num_tensor_constants += 1
+            if isinstance(constant_val, torch.ScriptObject):
+                constant_name = f"_lifted_custom_obj{num_custom_obj}"
+                constant_kind = InputKind.CUSTOM_OBJ
+                constant_arg_cls = CustomObjArgument  # type: ignore[assignment]
+                num_custom_obj += 1
+            elif isinstance(constant_val, torch.Tensor):
+                constant_name = f"_lifted_tensor_constant{num_tensor_constants}"
+                constant_kind = InputKind.CONSTANT_TENSOR
+                constant_arg_cls = TensorArgument  # type: ignore[assignment]
+                num_tensor_constants += 1
+            else:
+                continue
 
             with gm.graph.inserting_before(first_user_input):
                 # Insert the constant node before the first user input
-                const_placeholder_node = gm.graph.placeholder(constant_tensor_fqn)
+                const_placeholder_node = gm.graph.placeholder(constant_name)
                 for k, v in node.meta.items():
                     const_placeholder_node.meta[k] = v
-                const_placeholder_node.meta["val"] = fake_mode.from_tensor(
-                    constant_tensor, static_shapes=True
-                )
-                const_placeholder_node.meta["val"].constant = constant_tensor
+                if isinstance(constant_val, torch.Tensor):
+                    const_placeholder_node.meta["val"] = fake_mode.from_tensor(
+                        constant_val, static_shapes=True
+                    )
+                    const_placeholder_node.meta["val"].constant = constant_val
+                else:
+                    const_placeholder_node.meta["val"] = constant_val
+
                 node.replace_all_uses_with(const_placeholder_node)
                 gm.graph.erase_node(node)
+
+                # The FQN of the constant tensor in the state dict should
+                # correspond to the module where the constant tensor was
+                # originally used.
+                parent_fqn = list(
+                    const_placeholder_node.meta["nn_module_stack"].values()
+                )[-1][0]
+                constant_fqn = f"{parent_fqn}.{constant_name}"
 
                 # Add the constant as a buffer to the graph signature
                 graph_signature.input_specs.insert(
                     first_user_input_loc,
                     InputSpec(
-                        kind=InputKind.CONSTANT_TENSOR,
-                        arg=TensorArgument(name=const_placeholder_node.name),
-                        target=constant_tensor_fqn,
+                        kind=constant_kind,
+                        arg=constant_arg_cls(name=const_placeholder_node.name),
+                        target=constant_fqn,
                     ),
                 )
-                tensor_constants[constant_tensor_fqn] = constant_tensor
+                all_constants[constant_fqn] = constant_val
                 first_user_input_loc += 1
 
     gm.recompile()
-    return tensor_constants
+    return all_constants
