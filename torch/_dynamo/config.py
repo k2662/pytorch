@@ -116,7 +116,7 @@ guard_nn_modules_using_dict_tags = True
 # currently buggy, the main show stopper for nontrivial use is
 # https://github.com/pytorch/torchdynamo/issues/1952
 traceable_tensor_subclasses: Set[Type[Any]] = {
-    bias.CausalBias,
+    # bias.CausalBias,
 }
 
 # Suppress errors in torch._dynamo.optimize, instead forcing a fallback to eager.
